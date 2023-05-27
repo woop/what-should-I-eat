@@ -2,9 +2,9 @@ import os
 from time import sleep
 from typing import List
 
-import streamlit as st
 import pandas as pd
 import requests
+import streamlit as st
 
 APIFI_SYNC_ENDPOINT = "https://api.apify.com/v2/acts/compass~crawler-google-places/run-sync-get-dataset-items"
 
