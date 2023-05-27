@@ -117,7 +117,8 @@ def summarize(restaurant, extracted_review_info: List[str], model="gpt-4"):
     You are a world class food critic. You will be given multiple documents containing summaries of reviews for a 
     restaurant. Each of these summaries contain the best dishes, the worst dishes, and criticisms of the restaurant.
     
-    Create a final report that merges each section together. 
+    Create a final report that merges each section together. The title should be the restaurant name and should not say
+    Final Report.
      
      Your final report will have 3 sections
     * The top 3 dishes, with all positive quotes and mentions of the dish from all documents
@@ -137,10 +138,11 @@ def summarize(restaurant, extracted_review_info: List[str], model="gpt-4"):
 
     prompt_template_critique = f"""
     You are a world class food critic. Please critique the summary of the restaurant above.
-    Are the quotes for the best dishes and worst dishes accurate?
+    Are the quotes for the best dishes and worst dishes accurate? Are the lists ranked correctly?
     Are the criticisms of the restaurant valid?
     If not, please correct them or remove them
     You must respond in markdown and maintain any existing formatting.
+    Only respond with the updated sections. Do not add a description of your changes.
 
     {summarized_message}
     """
