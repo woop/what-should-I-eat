@@ -4,10 +4,7 @@ from typing import List
 
 import streamlit as st
 import pandas as pd
-import numpy as np
 import requests
-import json
-import tiktoken
 
 APIFI_SYNC_ENDPOINT = "https://api.apify.com/v2/acts/compass~crawler-google-places/run-sync-get-dataset-items"
 
