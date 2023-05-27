@@ -107,22 +107,29 @@ def call_openai_for_review_info(model, prompt_template):
 def summarize(restaurant, extracted_review_info: List[str], model="gpt-4"):
     status_text.write("Summarizing reviews with GPT-4")
 
-    combined_extracted_review_info = "\n\n".join(extracted_review_info)
+    combined_extracted_review_info = ''
+    for i, review_info in enumerate(extracted_review_info):
+        combined_extracted_review_info += f"Review summary {i} of {len(extracted_review_info)}\n"
+        combined_extracted_review_info += "===\n"
+        combined_extracted_review_info += review_info
+        combined_extracted_review_info += "\n\n"
+
     prompt_template = f"""
     You are a world class food critic. You will be given multiple documents containing summaries of reviews for a 
     restaurant. Each of these summaries contain the best dishes, the worst dishes, and criticisms of the restaurant.
-    You will merge these documents into one final summary. Your final summary will have 3 sections
-    * The top 3 dishes, along with how many times it was mentioned in total and the top quotes for that dish
-    * The worst 3 dishes, along with how many times it was mentioned in total and the top quotes for that dish
-    * The criticisms of the restaurant. Make sure that only valid criticisms are included.
+    
+    Create a final report that merges each section together. 
+     
+     Your final report will have 3 sections
+    * The top 3 dishes, with all positive quotes and mentions of the dish from all documents
+    * The worst 3 dishes, with all negative quotes and mentions of the dish from all documents
+    * The criticisms of the restaurant from all documents. Pay special attention to make sure they are actually negative
     
     You must respond in markdown.
 
     {restaurant}
     {combined_extracted_review_info}
     """
-
-    print(prompt_template)
 
     # create a chat completion
     summarized_message = summarize_review_infos(model, prompt_template)
@@ -131,7 +138,8 @@ def summarize(restaurant, extracted_review_info: List[str], model="gpt-4"):
 
     prompt_template_critique = f"""
     You are a world class food critic. Please critique the summary of the restaurant above.
-    Are the quotes for the best dishes and worst dishes accurate? Are the criticisms of the restaurant valid?
+    Are the quotes for the best dishes and worst dishes accurate?
+    Are the criticisms of the restaurant valid?
     If not, please correct them or remove them
     You must respond in markdown and maintain any existing formatting.
 
@@ -324,6 +332,7 @@ if google_maps_url and is_submitted:
 
     summary = summarize(restaurant_title, review_info)
     status_text.write(f"Done! ({len(data['reviews'])} reviews)")
+    restaurant_name = st.empty()
     st.markdown(summary)
 
     st.header("Reviews Table")
