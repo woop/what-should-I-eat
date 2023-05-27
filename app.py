@@ -15,56 +15,14 @@ APIFI_ASYNC_ENDPOINT = (
     "https://api.apify.com/v2/acts/compass~crawler-google-places/runs"
 )
 
-DEFAULT_RESTAURANT='https://goo.gl/maps/sNG2jZVTD4t2QFfA7'
+DEFAULT_RESTAURANT = "https://goo.gl/maps/FHGpxBirpdJRTjbd7"
 
 apifi_api_token = os.getenv("APIFI_API_TOKEN")
 querystring = {"token": apifi_api_token, "timeout": "120", "format": "json"}
 
 import openai
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
-@st.cache_data
-def scrape_reviews(google_maps_url):
-    # Define API details
-
-    # Define the payload with the provided URL
-    payload = {
-        "exportPlaceUrls": False,
-        "includeWebResults": False,
-        "language": "en",
-        "maxCrawledPlacesPerSearch": 1,
-        "maxImages": 0,
-        "maxReviews": 5000,
-        "oneReviewPerRow": False,
-        "onlyDataFromSearchPage": False,
-        "scrapeResponseFromOwnerText": True,
-        "scrapeReviewId": True,
-        "scrapeReviewUrl": True,
-        "scrapeReviewerId": True,
-        "scrapeReviewerName": False,
-        "scrapeReviewerUrl": True,
-        "startUrls": [{"url": google_maps_url}],
-        "reviewsSort": "newest",
-        "reviewsFilterString": "",
-        "searchMatching": "all",
-        "allPlacesNoSearchAction": "",
-    }
-    headers = {"Content-Type": "application/json"}
-
-    # Make the request to the API
-    response = requests.request(
-        "GET", APIFI_SYNC_ENDPOINT, json=payload, headers=headers, params=querystring
-    )
-
-    # Convert the response to JSON
-    data = response.json()
-
-    return data
-
-
-# If URL is provided
-@st.cache_data
 def extract_review_info(data, model="gpt-3.5-turbo"):
     reviews = data["reviews"]
 
@@ -78,14 +36,14 @@ def extract_review_info(data, model="gpt-3.5-turbo"):
         else:
             reviews_text.append(review["text"])
 
-
     extracted_review_info = []
 
-    # create a review batch of 25 reviews, and ask OpenAI to extract information from it
     for i in range(0, len(reviews_text), 25):
-
-        status_text.write(f"Extracting information from reviews {i} to {i+25}")
-        review_batch_text_by_newline = '\n'.join(reviews_text[i:i + 25])
+        status_text.write(
+            f"Extracting best dishes, worst dishes, and critiques from reviews {i} to {i + 25} out of "
+            f"{len(reviews_text)} of using GPT-3.5-turbo"
+        )
+        review_batch_text_by_newline = "\n".join(reviews_text[i : i + 25])
         prompt_template = f"""
         You are a world class food critic. You will look at a collection of restaurant reviews and extract 
         the following information from each review and place them in the correct category
@@ -131,20 +89,25 @@ def extract_review_info(data, model="gpt-3.5-turbo"):
         """
 
         # create a chat completion
-        chat_completion = openai.ChatCompletion.create(
-            model=model, messages=[{"role": "user", "content": prompt_template}]
-        )
-
-        extracted_review_info.append(chat_completion.choices[0].message.content)
+        extracted_review_from_chat = call_openai_for_review_info(model, prompt_template)
+        extracted_review_info.append(extracted_review_from_chat)
 
     return extracted_review_info
 
 
 @st.cache_data
+def call_openai_for_review_info(model, prompt_template):
+    chat_completion = openai.ChatCompletion.create(
+        model=model, messages=[{"role": "user", "content": prompt_template}]
+    )
+    extracted_review_from_chat = chat_completion.choices[0].message.content
+    return extracted_review_from_chat
+
+
 def summarize(restaurant, extracted_review_info: List[str], model="gpt-4"):
     status_text.write("Summarizing reviews with GPT-4")
 
-    combined_extracted_review_info = '\n\n'.join(extracted_review_info)
+    combined_extracted_review_info = "\n\n".join(extracted_review_info)
     prompt_template = f"""
     You are a world class food critic. You will be given multiple documents containing summaries of reviews for a 
     restaurant. Each of these summaries contain the best dishes, the worst dishes, and criticisms of the restaurant.
@@ -162,15 +125,49 @@ def summarize(restaurant, extracted_review_info: List[str], model="gpt-4"):
     print(prompt_template)
 
     # create a chat completion
-    chat_completion = openai.ChatCompletion.create(
-        model=model, messages=[{"role": "user", "content": prompt_template}]
+    summarized_message = summarize_review_infos(model, prompt_template)
+
+    status_text.write("Summarization complete, double checking results...")
+
+    prompt_template_critique = f"""
+    You are a world class food critic. Please critique the summary of the restaurant above.
+    Are the quotes for the best dishes and worst dishes accurate? Are the criticisms of the restaurant valid?
+    If not, please correct them or remove them
+    You must respond in markdown and maintain any existing formatting.
+
+    {summarized_message}
+    """
+
+    # double check that the summary is valid
+    chat_completion_critique_response = critique_summary(
+        model, prompt_template_critique
     )
 
     # print the chat completion
-    return chat_completion.choices[0].message.content
+    return chat_completion_critique_response
 
 
-@st.cache_data(allow_output_mutation=True, suppress_st_warning=True)
+@st.cache_data
+def critique_summary(model, prompt_template_critique):
+    chat_completion_critique = openai.ChatCompletion.create(
+        model=model, messages=[{"role": "user", "content": prompt_template_critique}]
+    )
+    chat_completion_critique_response = chat_completion_critique.choices[
+        0
+    ].message.content
+    return chat_completion_critique_response
+
+
+@st.cache_data
+def summarize_review_infos(model, prompt_template):
+    chat_completion = openai.ChatCompletion.create(
+        model=model, messages=[{"role": "user", "content": prompt_template}]
+    )
+    summarized_message = chat_completion.choices[0].message.content
+    return summarized_message
+
+
+@st.cache_data
 def start_scrape_job(google_maps_url):
     # Define the payload with the provided URL
     payload = {
@@ -239,6 +236,7 @@ def stream_logs(act_id):
             if "INFO" in decoded_line:
                 pattern = r"Extracting reviews: (\d+\/\d+)"
                 import re
+
                 match = re.search(pattern, decoded_line)
                 if match:
                     # extract the review info
@@ -252,17 +250,23 @@ def stream_logs(act_id):
 st.title("What should I eat?")
 
 # Ask user for the Google Maps URL
-google_maps_url = st.text_input(
-    "Enter the Google Maps URL", value="https://goo.gl/maps/Sp3rLZwVZe57GiuXA"
-)
+openai_api_key_input = st.empty()
+
+# see if OPENAI_API_KEY env var is set
+if "OPENAI_API_KEY" in os.environ:
+    openai_api_key_input = st.text_input("Enter your OpenAI API key", type="password", value=os.environ["OPENAI_API_KEY"])
+else:
+    openai_api_key_input = st.text_input("Enter your OpenAI API key", type="password")
+
+google_maps_url = st.text_input("Enter the Google Maps URL", value=DEFAULT_RESTAURANT)
 is_submitted = st.button("Submit")
-heading = st.header("Status")
+restaurant_name = st.empty()
+status_heading = st.empty()
 status_text = st.empty()
 
 
 @st.cache_data
 def get_dataset(dataset_id):
-    # https://api.apify.com/v2/datasets/nJPUOKQf6QMapsAS4/items?token=***
     url = f"https://api.apify.com/v2/datasets/{dataset_id}/items"
     querystring = {"token": apifi_api_token}
     headers = {"Content-Type": "application/json"}
@@ -272,6 +276,7 @@ def get_dataset(dataset_id):
 
 
 if google_maps_url and is_submitted:
+    status_heading.header("Status")
     status_text.write("Starting review crawling...")
     # start the scraping job
     act_id = start_scrape_job(google_maps_url)
@@ -307,12 +312,18 @@ if google_maps_url and is_submitted:
     dataset_id = get_dataset_id(act_id)
     dataset = get_dataset(dataset_id)
     data = dataset[0]
+    restaurant_description = data['description']
+    restaurant_title = data['title']
+    if restaurant_description:
+        restaurant_title = restaurant_title + " - " + restaurant_description
+    restaurant_name = st.header(restaurant_title)
+
     status_text.write(f"Fetched {len(data['reviews'])} reviews...")
 
     review_info = extract_review_info(data)
 
-    restaurant = f"{data['title']} {data['description']}"
-    summary = summarize(restaurant, review_info)
+    summary = summarize(restaurant_title, review_info)
+    status_text.write(f"Done! ({len(data['reviews'])} reviews)")
     st.markdown(summary)
 
     st.header("Reviews Table")
@@ -320,6 +331,9 @@ if google_maps_url and is_submitted:
     if "reviews" in data and data["reviews"]:
         # Convert reviews to a DataFrame
         reviews_df = pd.json_normalize(data["reviews"])
+
+        # Remove rows in the "text" column that are "None"
+        reviews_df = reviews_df[reviews_df["text"].notna()]
 
         # Display the table in the app
         st.dataframe(reviews_df)
