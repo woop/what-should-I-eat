@@ -282,7 +282,7 @@ if google_maps_url and is_submitted:
     status_text.write("Starting review crawling...")
     # start the scraping job
     act_id = start_scrape_job(google_maps_url)
-    sleep(0.5)
+    sleep(1)
 
     if act_id is None:
         status_text.write("Something went wrong. Please try again.")
