@@ -1,4 +1,5 @@
 import os
+import uuid
 from time import sleep
 from typing import List
 
@@ -147,8 +148,10 @@ def summarize_review_infos(model, prompt_template):
     return summarized_message
 
 
-@st.cache_data
-def start_scrape_job(google_maps_url):
+@st.cache_data()
+def start_scrape_job(google_maps_url, bust_cache_string=None):
+    if bust_cache_string:
+        print("busting cache with " + bust_cache_string)
     # Define the payload with the provided URL
     payload = {
         "exportPlaceUrls": False,
@@ -283,6 +286,12 @@ if google_maps_url and is_submitted:
     # start the scraping job
     act_id = start_scrape_job(google_maps_url)
     sleep(1)
+
+    status = get_run_status(act_id)
+    if status == "FAILED" or status == "ABORTED" or status == "TIMED_OUT":
+        bust_cache_random_string = str(uuid.uuid4())
+        act_id = start_scrape_job(google_maps_url, bust_cache_random_string)
+        sleep(1)
 
     if act_id is None:
         status_text.write("Something went wrong. Please try again.")
