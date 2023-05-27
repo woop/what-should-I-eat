@@ -104,9 +104,11 @@ def call_openai_for_review_info(model, prompt_template):
 def summarize(restaurant, extracted_review_info: List[str], model="gpt-4"):
     status_text.write("Summarizing reviews with GPT-4")
 
-    combined_extracted_review_info = ''
+    combined_extracted_review_info = ""
     for i, review_info in enumerate(extracted_review_info):
-        combined_extracted_review_info += f"Review summary {i} of {len(extracted_review_info)}\n"
+        combined_extracted_review_info += (
+            f"Review summary {i} of {len(extracted_review_info)}\n"
+        )
         combined_extracted_review_info += "===\n"
         combined_extracted_review_info += review_info
         combined_extracted_review_info += "\n\n"
@@ -259,7 +261,9 @@ openai_api_key_input = st.empty()
 
 # see if OPENAI_API_KEY env var is set
 if "OPENAI_API_KEY" in os.environ:
-    openai_api_key_input = st.text_input("Enter your OpenAI API key", type="password", value=os.environ["OPENAI_API_KEY"])
+    openai_api_key_input = st.text_input(
+        "Enter your OpenAI API key", type="password", value=os.environ["OPENAI_API_KEY"]
+    )
 else:
     openai_api_key_input = st.text_input("Enter your OpenAI API key", type="password")
 
@@ -317,8 +321,8 @@ if google_maps_url and is_submitted:
     dataset_id = get_dataset_id(act_id)
     dataset = get_dataset(dataset_id)
     data = dataset[0]
-    restaurant_description = data['description']
-    restaurant_title = data['title']
+    restaurant_description = data["description"]
+    restaurant_title = data["title"]
     if restaurant_description:
         restaurant_title = restaurant_title + " - " + restaurant_description
     restaurant_name = st.header(restaurant_title)
