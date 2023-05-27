@@ -269,6 +269,8 @@ if "OPENAI_API_KEY" in os.environ:
 else:
     openai_api_key_input = st.text_input("Enter your OpenAI API key", type="password")
 
+openai.api_key = openai_api_key_input
+
 google_maps_url = st.text_input("Enter the Google Maps URL", value=DEFAULT_RESTAURANT)
 is_submitted = st.button("Submit")
 restaurant_name = st.empty()
