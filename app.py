@@ -5,6 +5,7 @@ from typing import List
 import pandas as pd
 import requests
 import streamlit as st
+import tiktoken
 
 APIFI_SYNC_ENDPOINT = "https://api.apify.com/v2/acts/compass~crawler-google-places/run-sync-get-dataset-items"
 
@@ -20,77 +21,82 @@ querystring = {"token": apifi_api_token, "timeout": "120", "format": "json"}
 import openai
 
 
-def extract_review_info(data, model="gpt-3.5-turbo"):
+@st.cache_data
+def find_useful_reviews(review_batch, model):
+    prompt_template = f"""
+You are going to be given a list of reviews. Extract all reviews that are positive about a specific dish,
+negative about a specific dish, or criticize the restaurant. Return the reviews in three markdown lists. I will provide
+an example
+
+Example
+===
+Input
+- Best location
+- Hard to find parking
+- Best fish soup super tasty
+- Best fish soup
+- The dumplings suck
+- The fish soup is great
+- The dumplings are terrible
+- The location is great
+- Slow service
+
+Output
+
+# Positive
+- Best fish soup super tasty
+- The fish soup is great
+- Best fish soup
+
+# Negative
+- The dumplings suck
+- The dumplings are terrible
+
+# Criticisms
+- Hard to find parking
+- Slow service
+
+===
+Input:
+{review_batch}
+
+Output:"""
+
+    chat_completion = openai.ChatCompletion.create(
+        model=model, messages=[{"role": "user", "content": prompt_template}]
+    )
+    useful_reviews = chat_completion.choices[0].message.content
+    return useful_reviews
+
+
+def extract_review_info(data, model="gpt-4"):
     reviews = data["reviews"]
 
     reviews_text = []
     for review in reviews:
-        if not review["text"]:
-            if not review["textTranslated"]:
+        if not review["textTranslated"]:
+            if not review["text"]:
                 continue
             else:
-                reviews_text.append(review["textTranslated"])
+                reviews_text.append(review["text"])
         else:
-            reviews_text.append(review["text"])
+            reviews_text.append(review["textTranslated"])
 
-    extracted_review_info = []
-
-    for i in range(0, len(reviews_text), 25):
-        status_text.write(
-            f"Extracting best dishes, worst dishes, and critiques from reviews {i} to {i + 25} out of "
-            f"{len(reviews_text)} of using GPT-3.5-turbo"
-        )
-        review_batch_text_by_newline = "\n".join(reviews_text[i : i + 25])
-        prompt_template = f"""
-        You are a world class food critic. You will look at a collection of restaurant reviews and extract 
-        the following information from each review and place them in the correct category
-        * Any dishes mentioned in a review in a positive way. Extract the dish name, the number of times it was mentioned positively, and a single quote of the most glowing review of the dish.
-        * Any dishes mentioned in a negative way. Extract the dish name, the number of times it was mentioned negatively, and a single quote of the most negative review of the dish.
-        * Any criticisms of the restaurant that are not related to food. Only return criticisms.
-        Make sure to respond in markdown format. You should have 3 sections. "Best dishes", "Worst dishes", "Criticisms of the restaurant"
-        
-        I will provide an example
-        
-        Example
-        ===
-        Input: 
-        The best fish soup in singapore by far!
-        The line was very long
-        The service was very slow
-        The fish soup was very good
-        The dumplings were terrible
-        The dumplings were ok
-        The fish soup was very tasty
-        The service was mediocre but the fish soup was pretty good
-        I enjoyed the tempe, but want to try the fish soup next time
-        
-        Output:
-        Best dishes:
-        * fish soup (3 mentions)
-            * The best fish soup in singapore by far!
-        * tempe (1 mention)
-            * I enjoyed the tempe, but want to try the fish soup next time
-            
-        Worst dishes:
-        * dumplings (2 mentions)
-            * The dumplings were terrible
-        
-        Criticisms of the restaurant:
-        * The line was very long
-        * The service was very slow
-        * The service was mediocre but the fish soup was pretty good
-        
-        ===
-        Input:
-        {review_batch_text_by_newline}
-        """
-
-        # create a chat completion
-        extracted_review_from_chat = call_openai_for_review_info(model, prompt_template)
-        extracted_review_info.append(extracted_review_from_chat)
-
-    return extracted_review_info
-
+    review_batch = ""
+    reviews_text_pointer = 0
+    # all_useful_reviews = ''
+    while True:
+        enc = tiktoken.encoding_for_model(model)
+        current_encoding_len = len(enc.encode(review_batch))
+        additional_encoding_len = len(enc.encode(reviews_text[reviews_text_pointer]))
+        combined_encoding_len = current_encoding_len + additional_encoding_len
+        if combined_encoding_len > 5500:
+            return review_batch
+        else:
+            review_batch += '\n\n- ' + reviews_text[reviews_text_pointer]
+            reviews_text_pointer += 1
+            if reviews_text_pointer >= len(reviews_text):
+                return review_batch
 
 @st.cache_data
 def call_openai_for_review_info(model, prompt_template):
@@ -101,59 +107,24 @@ def call_openai_for_review_info(model, prompt_template):
     return extracted_review_from_chat
 
 
-def summarize(restaurant, extracted_review_info: List[str], model="gpt-4"):
+def summarize(restaurant, useful_reviews: str, model="gpt-4"):
     status_text.write("Summarizing reviews with GPT-4")
 
-    combined_extracted_review_info = ""
-    for i, review_info in enumerate(extracted_review_info):
-        combined_extracted_review_info += (
-            f"Review summary {i} of {len(extracted_review_info)}\n"
-        )
-        combined_extracted_review_info += "===\n"
-        combined_extracted_review_info += review_info
-        combined_extracted_review_info += "\n\n"
+    prompt_template = f"""===
+{restaurant}
+===
+{useful_reviews}
+===
+You are a world class food critic. Above are a list of reviews from users for a restaurant.
 
-    prompt_template = f"""
-    You are a world class food critic. You will be given multiple documents containing summaries of reviews for a 
-    restaurant. Each of these summaries contain the best dishes, the worst dishes, and criticisms of the restaurant.
-    
-    Create a final report that merges each section together. The title should be the restaurant name and should not say
-    Final Report.
-     
-     Your final report will have 3 sections
-    * The top 3 dishes, with all positive quotes and mentions of the dish from all documents
-    * The worst 3 dishes, with all negative quotes and mentions of the dish from all documents
-    * The criticisms of the restaurant from all documents. Pay special attention to make sure they are actually negative
-    
-    You must respond in markdown.
-
-    {restaurant}
-    {combined_extracted_review_info}
-    """
+Create a markdown summary of the restaurant. It has 3 headings. "Best dishes", "Worst dishes", and "Criticisms".
+Under the best and worst dishes categories, list the top 3 dishes and the bottom 3 dishes. Add all quotes related to
+those dishes underneath those dishes. Also add the amount of mentions of that dish. Under criticisms, group all
+criticisms together into categories and list the related quotes under each category. Do not return anything else."""
 
     # create a chat completion
     summarized_message = summarize_review_infos(model, prompt_template)
-
-    status_text.write("Summarization complete, double checking results...")
-
-    prompt_template_critique = f"""
-    You are a world class food critic. Please critique the summary of the restaurant above.
-    Are the quotes for the best dishes and worst dishes accurate? Are the lists ranked correctly?
-    Are the criticisms of the restaurant valid?
-    If not, please correct them or remove them
-    You must respond in markdown and maintain any existing formatting.
-    Only respond with the updated sections. Do not add a description of your changes.
-
-    {summarized_message}
-    """
-
-    # double check that the summary is valid
-    chat_completion_critique_response = critique_summary(
-        model, prompt_template_critique
-    )
-
-    # print the chat completion
-    return chat_completion_critique_response
+    return summarized_message
 
 
 @st.cache_data
@@ -185,10 +156,10 @@ def start_scrape_job(google_maps_url):
         "language": "en",
         "maxCrawledPlacesPerSearch": 1,
         "maxImages": 0,
-        "maxReviews": 5000,
+        "maxReviews": 200,
         "oneReviewPerRow": False,
         "onlyDataFromSearchPage": False,
-        "scrapeResponseFromOwnerText": True,
+        "scrapeResponseFromOwnerText": False,
         "scrapeReviewId": True,
         "scrapeReviewUrl": True,
         "scrapeReviewerId": True,
@@ -257,6 +228,7 @@ def stream_logs(act_id):
 
 # Title of the app
 st.title("What should I eat?")
+st.text("A tool to help you find the best (and worst) dishes at a restaurant")
 
 # Ask user for the Google Maps URL
 openai_api_key_input = st.empty()
@@ -275,7 +247,22 @@ google_maps_url = st.text_input("Enter the Google Maps URL", value=DEFAULT_RESTA
 is_submitted = st.button("Submit")
 restaurant_name = st.empty()
 status_heading = st.empty()
+status_subheading = st.empty()
 status_text = st.empty()
+
+
+@st.cache_data
+def get_previous_runs():
+    url = f"https://api.apify.com/v2/actor-runs"
+
+    querystring = {"token": apifi_api_token}
+    headers = {"Content-Type": "application/json"}
+    response = requests.request("GET", url, headers=headers, params=querystring)
+    response_json = response.json()
+    if "data" in response_json:
+        return response_json["data"]["items"]
+    else:
+        return []
 
 
 @st.cache_data
@@ -290,6 +277,8 @@ def get_dataset(dataset_id):
 
 if google_maps_url and is_submitted:
     status_heading.header("Status")
+    status_subheading.text("Please note that it takes about 5 minutes to compute results!")
+
     status_text.write("Starting review crawling...")
     # start the scraping job
     act_id = start_scrape_job(google_maps_url)
