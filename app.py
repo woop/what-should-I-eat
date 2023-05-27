@@ -1,5 +1,6 @@
 import os
 from time import sleep
+from typing import List
 
 import streamlit as st
 import pandas as pd
@@ -14,9 +15,14 @@ APIFI_ASYNC_ENDPOINT = (
     "https://api.apify.com/v2/acts/compass~crawler-google-places/runs"
 )
 
+DEFAULT_RESTAURANT='https://goo.gl/maps/sNG2jZVTD4t2QFfA7'
+
 apifi_api_token = os.getenv("APIFI_API_TOKEN")
 querystring = {"token": apifi_api_token, "timeout": "120", "format": "json"}
 
+import openai
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 @st.cache_data
 def scrape_reviews(google_maps_url):
@@ -59,12 +65,9 @@ def scrape_reviews(google_maps_url):
 
 # If URL is provided
 @st.cache_data
-def summarize(data, model="gpt-4"):
-    import openai
+def extract_review_info(data, model="gpt-3.5-turbo"):
+    reviews = data["reviews"]
 
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-
-    reviews = data["reviews"][0:50]
     reviews_text = []
     for review in reviews:
         if not review["text"]:
@@ -75,21 +78,85 @@ def summarize(data, model="gpt-4"):
         else:
             reviews_text.append(review["text"])
 
-    restaurant = f"{data['title']} {data['description']}"
 
+    extracted_review_info = []
+
+    # create a review batch of 25 reviews, and ask OpenAI to extract information from it
+    for i in range(0, len(reviews_text), 25):
+
+        status_text.write(f"Extracting information from reviews {i} to {i+25}")
+        review_batch_text_by_newline = '\n'.join(reviews_text[i:i + 25])
+        prompt_template = f"""
+        You are a world class food critic. You will look at a collection of restaurant reviews and extract 
+        the following information from each review and place them in the correct category
+        * Any dishes mentioned in a review in a positive way. Extract the dish name, the number of times it was mentioned positively, and a single quote of the most glowing review of the dish.
+        * Any dishes mentioned in a negative way. Extract the dish name, the number of times it was mentioned negatively, and a single quote of the most negative review of the dish.
+        * Any criticisms of the restaurant that are not related to food. Only return criticisms.
+        Make sure to respond in markdown format. You should have 3 sections. "Best dishes", "Worst dishes", "Criticisms of the restaurant"
+        
+        I will provide an example
+        
+        Example
+        ===
+        Input: 
+        The best fish soup in singapore by far!
+        The line was very long
+        The service was very slow
+        The fish soup was very good
+        The dumplings were terrible
+        The dumplings were ok
+        The fish soup was very tasty
+        The service was mediocre but the fish soup was pretty good
+        I enjoyed the tempe, but want to try the fish soup next time
+        
+        Output:
+        Best dishes:
+        * fish soup (3 mentions)
+            * The best fish soup in singapore by far!
+        * tempe (1 mention)
+            * I enjoyed the tempe, but want to try the fish soup next time
+            
+        Worst dishes:
+        * dumplings (2 mentions)
+            * The dumplings were terrible
+        
+        Criticisms of the restaurant:
+        * The line was very long
+        * The service was very slow
+        * The service was mediocre but the fish soup was pretty good
+        
+        ===
+        Input:
+        {review_batch_text_by_newline}
+        """
+
+        # create a chat completion
+        chat_completion = openai.ChatCompletion.create(
+            model=model, messages=[{"role": "user", "content": prompt_template}]
+        )
+
+        extracted_review_info.append(chat_completion.choices[0].message.content)
+
+    return extracted_review_info
+
+
+@st.cache_data
+def summarize(restaurant, extracted_review_info: List[str], model="gpt-4"):
+    status_text.write("Summarizing reviews with GPT-4")
+
+    combined_extracted_review_info = '\n\n'.join(extracted_review_info)
     prompt_template = f"""
-    You are a world class food critic. You will be presented with a restaurant and a list of reviews. You must extract 
-    the following information
-    * The top 3 dishes at the restaurant based on the reviews. Also include the number of times each dish was mentioned, and
-    include at least 5 reviews for each dish.
-    * The worst 3 dishes at the restaurant based on the reviews, and include reviews that criticize the dish.
-    * The best parts about the restaurant
-    * The worst parts about the restaurant
+    You are a world class food critic. You will be given multiple documents containing summaries of reviews for a 
+    restaurant. Each of these summaries contain the best dishes, the worst dishes, and criticisms of the restaurant.
+    You will merge these documents into one final summary. Your final summary will have 3 sections
+    * The top 3 dishes, along with how many times it was mentioned in total and the top quotes for that dish
+    * The worst 3 dishes, along with how many times it was mentioned in total and the top quotes for that dish
+    * The criticisms of the restaurant. Make sure that only valid criticisms are included.
     
-    Make sure to respond in markdown format. You should have 4 sections. You should have bullet points under each.
-    
+    You must respond in markdown.
+
     {restaurant}
-    {reviews_text}
+    {combined_extracted_review_info}
     """
 
     print(prompt_template)
@@ -103,7 +170,7 @@ def summarize(data, model="gpt-4"):
     return chat_completion.choices[0].message.content
 
 
-@st.cache(allow_output_mutation=True, suppress_st_warning=True)
+@st.cache_data(allow_output_mutation=True, suppress_st_warning=True)
 def start_scrape_job(google_maps_url):
     # Define the payload with the provided URL
     payload = {
@@ -242,7 +309,10 @@ if google_maps_url and is_submitted:
     data = dataset[0]
     status_text.write(f"Fetched {len(data['reviews'])} reviews...")
 
-    summary = summarize(data)
+    review_info = extract_review_info(data)
+
+    restaurant = f"{data['title']} {data['description']}"
+    summary = summarize(restaurant, review_info)
     st.markdown(summary)
 
     st.header("Reviews Table")
